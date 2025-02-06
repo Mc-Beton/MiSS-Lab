@@ -3,7 +3,6 @@ package com.domain;
 import javafx.scene.layout.Pane;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
-
 import java.util.*;
 
 public class Pojazd {
@@ -12,52 +11,42 @@ public class Pojazd {
     private PunktTransportu celPunkt;
     private int postojTimer = 0;
     private final List<Przystanek> doOdwiedzenia;
+    private double predkosc = 1.0;
+    private final List<Sygnalizacja> sygnalizacje;
+    private final Set<Sygnalizacja> mijaneSygnalizacje = new HashSet<>();
 
-    public Pojazd(PunktTransportu start, List<Przystanek> przystanki, Pane pane) {
+    public Pojazd(PunktTransportu start, List<Przystanek> przystanki, Pane pane, List<Sygnalizacja> sygnalizacje) {
         this.aktualnyPunkt = start;
         this.doOdwiedzenia = new ArrayList<>(przystanki);
-        this.celPunkt = znajdzNajkrotszaDroge(doOdwiedzenia.get(0), new ArrayList<>());
+        this.sygnalizacje = sygnalizacje;
+        this.doOdwiedzenia.sort(Comparator.comparingInt(Przystanek::getKategoria));
+        this.celPunkt = doOdwiedzenia.isEmpty() ? null : znajdzNajlepszaTrase(doOdwiedzenia.get(0));
         this.pojazd = new Circle(start.getX(), start.getY(), 8, Color.RED);
         pane.getChildren().add(pojazd);
     }
 
-    private PunktTransportu znajdzNajkrotszaDroge(PunktTransportu cel, List<Sygnalizacja> sygnalizacje) {
-        Map<PunktTransportu, Double> odleglosci = new HashMap<>();
-        Map<PunktTransportu, Integer> liczbaSygnalizacji = new HashMap<>();
-        Map<PunktTransportu, PunktTransportu> poprzednicy = new HashMap<>();
-        PriorityQueue<PunktTransportu> kolejka = new PriorityQueue<>((a, b) -> {
-            int sygnA = liczbaSygnalizacji.getOrDefault(a, Integer.MAX_VALUE);
-            int sygnB = liczbaSygnalizacji.getOrDefault(b, Integer.MAX_VALUE);
-            if (sygnA != sygnB) {
-                return Integer.compare(sygnA, sygnB);
-            }
-            return Double.compare(odleglosci.getOrDefault(a, Double.MAX_VALUE), odleglosci.getOrDefault(b, Double.MAX_VALUE));
-        });
+    public void ustawPredkosc(double nowaPredkosc) {
+        this.predkosc = Math.max(0.1, nowaPredkosc);
+    }
 
-        odleglosci.put(aktualnyPunkt, 0.0);
-        liczbaSygnalizacji.put(aktualnyPunkt, 0);
+    private PunktTransportu znajdzNajlepszaTrase(PunktTransportu cel) {
+        Map<PunktTransportu, Double> koszty = new HashMap<>();
+        PriorityQueue<PunktTransportu> kolejka = new PriorityQueue<>(Comparator.comparingDouble(koszty::get));
+        koszty.put(aktualnyPunkt, 0.0);
         kolejka.add(aktualnyPunkt);
+        Map<PunktTransportu, PunktTransportu> poprzednicy = new HashMap<>();
 
         while (!kolejka.isEmpty()) {
             PunktTransportu obecny = kolejka.poll();
-            if (obecny.equals(cel)) {
-                break;
-            }
-
+            if (obecny.equals(cel)) break;
             for (PunktTransportu sasiad : obecny.getPolaczenia()) {
                 double dystans = obliczDystans(obecny, sasiad);
-                int sygnalizacjeNaTrasie = liczbaSygnalizacjiNaTrasie(obecny, sasiad, sygnalizacje);
+                double obciazenie = obecny.getObciazeniePolaczenia(sasiad);
+                double sygnalizacjaKoszt = liczbaSygnalizacjiNaTrasie(obecny, sasiad) * 150;
+                double koszt = dystans + (obciazenie * 100) + sygnalizacjaKoszt;
 
-                double nowyKosztOdleglosci = odleglosci.get(obecny) + dystans;
-                int nowaLiczbaSygnalizacji = liczbaSygnalizacji.get(obecny) + sygnalizacjeNaTrasie;
-
-                boolean lepszaDroga = nowaLiczbaSygnalizacji < liczbaSygnalizacji.getOrDefault(sasiad, Integer.MAX_VALUE) ||
-                        (nowaLiczbaSygnalizacji == liczbaSygnalizacji.getOrDefault(sasiad, Integer.MAX_VALUE) &&
-                                nowyKosztOdleglosci < odleglosci.getOrDefault(sasiad, Double.MAX_VALUE));
-
-                if (lepszaDroga) {
-                    odleglosci.put(sasiad, nowyKosztOdleglosci);
-                    liczbaSygnalizacji.put(sasiad, nowaLiczbaSygnalizacji);
+                if (!koszty.containsKey(sasiad) || koszty.get(sasiad) > koszty.get(obecny) + koszt) {
+                    koszty.put(sasiad, koszty.get(obecny) + koszt);
                     poprzednicy.put(sasiad, obecny);
                     kolejka.add(sasiad);
                 }
@@ -68,11 +57,10 @@ public class Pojazd {
         while (poprzednicy.containsKey(punkt) && !poprzednicy.get(punkt).equals(aktualnyPunkt)) {
             punkt = poprzednicy.get(punkt);
         }
-
-        return punkt; // Zwraca następny punkt na najlepszej trasie
+        return punkt;
     }
 
-    private int liczbaSygnalizacjiNaTrasie(PunktTransportu start, PunktTransportu cel, List<Sygnalizacja> sygnalizacje) {
+    private int liczbaSygnalizacjiNaTrasie(PunktTransportu start, PunktTransportu cel) {
         int licznik = 0;
         for (Sygnalizacja sygnalizacja : sygnalizacje) {
             if (sygnalizacja.znajdujeSieBlisko((start.getX() + cel.getX()) / 2, (start.getY() + cel.getY()) / 2)) {
@@ -86,38 +74,42 @@ public class Pojazd {
         return Math.sqrt(Math.pow(p1.getX() - p2.getX(), 2) + Math.pow(p1.getY() - p2.getY(), 2));
     }
 
-    public void przemieszczaj(List<Sygnalizacja> sygnalizacje) {
+    public void przemieszczaj() {
         if (postojTimer > 0) {
             postojTimer--;
             return;
         }
 
+        for (Sygnalizacja sygnalizacja : sygnalizacje) {
+            if (sygnalizacja.znajdujeSieBlisko(pojazd.getCenterX(), pojazd.getCenterY())) {
+                if (!mijaneSygnalizacje.contains(sygnalizacja)) {
+                    if (!sygnalizacja.jestZielone()) {
+                        return; // Zatrzymaj pojazd na czerwonym świetle
+                    }
+                    mijaneSygnalizacje.add(sygnalizacja);
+                }
+            }
+        }
+
         double dx = celPunkt.getX() - pojazd.getCenterX();
         double dy = celPunkt.getY() - pojazd.getCenterY();
         double dystans = Math.sqrt(dx * dx + dy * dy);
+        double aktualnaPredkosc = predkosc / aktualnyPunkt.getObciazeniePolaczenia(celPunkt);
 
-        // Sprawdzenie sygnalizacji świetlnej
-        for (Sygnalizacja sygnalizacja : sygnalizacje) {
-            if (sygnalizacja.znajdujeSieBlisko(pojazd.getCenterX(), pojazd.getCenterY()) && !sygnalizacja.jestZielone()) {
-                return; // Zatrzymaj pojazd, jeśli sygnalizacja jest czerwona i pojazd jest blisko
-            }
-        }
-
-        if (dystans > 1) {
-            pojazd.setCenterX(pojazd.getCenterX() + dx / dystans);
-            pojazd.setCenterY(pojazd.getCenterY() + dy / dystans);
-        } else {
+        if (dystans < aktualnaPredkosc) {
+            pojazd.setCenterX(celPunkt.getX());
+            pojazd.setCenterY(celPunkt.getY());
             aktualnyPunkt = celPunkt;
             if (aktualnyPunkt instanceof Przystanek) {
-                postojTimer = 20; // Postój na przystanku (2 sekundy przy 100ms interwału)
+                postojTimer = 20;
                 doOdwiedzenia.remove(aktualnyPunkt);
             }
             if (!doOdwiedzenia.isEmpty()) {
-                celPunkt = znajdzNajkrotszaDroge(doOdwiedzenia.get(0), sygnalizacje);
-            } else {
-                celPunkt = znajdzNajkrotszaDroge(aktualnyPunkt.getPolaczenia().get(0), sygnalizacje);
+                celPunkt = znajdzNajlepszaTrase(doOdwiedzenia.get(0));
             }
+        } else {
+            pojazd.setCenterX(pojazd.getCenterX() + (dx / dystans) * aktualnaPredkosc);
+            pojazd.setCenterY(pojazd.getCenterY() + (dy / dystans) * aktualnaPredkosc);
         }
     }
 }
-
